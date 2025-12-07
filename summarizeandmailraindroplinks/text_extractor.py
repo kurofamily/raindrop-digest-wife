@@ -103,4 +103,25 @@ def _extract_readability(html_text: str, url: str) -> str:
 
 def _extract_images_from_html(html_text: str) -> List[str]:
     tree = html.fromstring(html_text)
-    return tree.xpath("//img/@src")
+    raw_urls = tree.xpath("//img/@src")
+    filtered = _filter_image_urls(raw_urls)
+    return filtered
+
+
+def _filter_image_urls(urls: List[str]) -> List[str]:
+    allowed_ext = (".jpg", ".jpeg", ".png", ".webp", ".gif")
+    blocked_keywords = ("facebook.com/tr?", "doubleclick", "adsystem", "pixel", "analytics", "collect")
+    cleaned: List[str] = []
+    for url in urls:
+        if not url:
+            continue
+        lower = url.lower()
+        if not (lower.startswith("http://") or lower.startswith("https://")):
+            continue
+        if any(bad in lower for bad in blocked_keywords):
+            continue
+        base = lower.split("?", 1)[0]
+        if not any(base.endswith(ext) for ext in allowed_ext):
+            continue
+        cleaned.append(url)
+    return cleaned[:5]
