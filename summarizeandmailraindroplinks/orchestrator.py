@@ -50,7 +50,7 @@ def run(settings: config.Settings) -> List[SummaryResult]:
         for item in targets:
             try:
                 content = extract_text(item.link)
-                summary_text = summarizer.summarize(content.text)
+                summary_text = summarizer.summarize(content.text, content.images)
                 author, cleaned_summary = split_author_and_summary(summary_text)
                 results.append(
                     SummaryResult(item=item, status="success", summary=cleaned_summary, author=author)

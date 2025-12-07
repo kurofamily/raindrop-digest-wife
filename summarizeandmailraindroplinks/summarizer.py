@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import List, Optional, Sequence
 
 from openai import APIConnectionError, APITimeoutError, OpenAI, RateLimitError
 
+from .config import IMAGE_TEXT_THRESHOLD, MIN_IMAGES_FOR_SUMMARY
 from .prompts import summarization_system_prompt
 
 logger = logging.getLogger(__name__)
@@ -23,13 +24,15 @@ class SummaryRateLimitError(SummaryError):
 
 
 class Summarizer:
-    def __init__(self, api_key: str, model: str = "gpt-4.1-mini"):
+    def __init__(self, api_key: str, model: str = "gpt-4.1-mini", client: Optional[OpenAI] = None):
         if not model or not model.strip():
             raise ValueError("OpenAI model must be provided.")
-        self._client = OpenAI(api_key=api_key)
+        self._client = client or OpenAI(api_key=api_key)
         self._model = model.strip()
 
-    def summarize(self, text: str) -> str:
+    def summarize(self, text: str, images: Optional[List[str]] = None) -> str:
+        include_images = self._should_include_images(text, images or [])
+        user_content = self._build_user_content(text, images or [], include_images)
         try:
             response = self._client.chat.completions.create(
                 model=self._model,
@@ -38,7 +41,7 @@ class Summarizer:
                         "role": "system",
                         "content": summarization_system_prompt(),
                     },
-                    {"role": "user", "content": text},
+                    {"role": "user", "content": user_content},
                 ],
                 temperature=0.3,
             )
@@ -56,3 +59,16 @@ class Summarizer:
             raise SummaryError("OpenAI returned empty content.")
         logger.info("Summary generated (%s chars)", len(content))
         return content.strip()
+
+    @staticmethod
+    def _should_include_images(text: str, images: Sequence[str]) -> bool:
+        return len(text) <= IMAGE_TEXT_THRESHOLD and len(images) >= MIN_IMAGES_FOR_SUMMARY
+
+    @staticmethod
+    def _build_user_content(text: str, images: Sequence[str], include_images: bool) -> list:
+        if not include_images or not images:
+            return [{"type": "text", "text": text}]
+        content = [{"type": "text", "text": text}]
+        for img in images:
+            content.append({"type": "image_url", "image_url": {"url": img}})
+        return content

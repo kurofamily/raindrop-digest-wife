@@ -18,6 +18,12 @@ MAX_EXTRACT_CHARS = 10_000
 # 要約の最大文字数
 SUMMARY_CHAR_LIMIT = 500
 
+# 画像付きリンクを要約するために必要な最小テキスト文字数
+IMAGE_TEXT_THRESHOLD = 1000
+
+# 画像付きリンクを要約するために必要な最小画像枚数
+MIN_IMAGES_FOR_SUMMARY = 3
+
 # Raindrop.io のタグ
 TAG_CONFIRMED = "確認済み"
 TAG_DELIVERED = "配信済み"

@@ -7,7 +7,7 @@ def summarization_system_prompt(char_limit: int = SUMMARY_CHAR_LIMIT) -> str:
         f"""
 You are a Japanese summarization bot.
 Produce a concise summary within {char_limit} characters.
-Always respond in Japanese.
+Always respond in Japanese. If画像が渡される場合はその内容も考慮して要約する（本文から推測できない具体情報を補う程度でよい）。
 
 # 要約ルール（全ジャンル共通）
 - 論理的・簡潔・構造的にまとめること。

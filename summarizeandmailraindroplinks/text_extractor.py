@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Tuple
+from typing import Tuple, List
 from urllib.parse import urlparse
 
 import httpx
@@ -45,27 +45,27 @@ def fetch_html(url: str) -> str:
 def extract_text(url: str) -> ExtractedContent:
     source = detect_source(url)
     if source == "x":
-        raise ExtractionError("Xリンクは有料会員にならないと文字列抽出できないため要約しません。")
+        raise ExtractionError("Xリンクは手動確認対象のため自動要約しません。")
     html_text = fetch_html(url)
     if source == "youtube":
-        text = _extract_youtube(html_text)
+        text, images = _extract_youtube(html_text)
     else:
-        text = _extract_readability(html_text, url)
+        text, images = _extract_readability(html_text, url)
     cleaned = text.strip()
     if not cleaned:
         raise ExtractionError("Extracted text is empty.")
     trimmed = trim_text(cleaned, MAX_EXTRACT_CHARS)
     logger.info("Extracted %s characters from %s (source=%s)", len(trimmed), url, source)
-    return ExtractedContent(text=trimmed, source=source, length=len(trimmed))
+    return ExtractedContent(text=trimmed, source=source, length=len(trimmed), images=images)
 
 
-def _extract_youtube(html_text: str) -> str:
+def _extract_youtube(html_text: str) -> Tuple[str, List[str]]:
     tree = html.fromstring(html_text)
     title = tree.findtext(".//title") or ""
     description_nodes = tree.xpath("//meta[@name='description']/@content")
     description = description_nodes[0] if description_nodes else ""
     combined = "\n".join(filter(None, [title.strip(), description.strip()]))
-    return combined
+    return combined, []
 
 
 def _extract_x(html_text: str) -> str:
@@ -77,9 +77,10 @@ def _extract_x(html_text: str) -> str:
     return description
 
 
-def _extract_readability(html_text: str, url: str) -> str:
+def _extract_readability(html_text: str, url: str) -> Tuple[str, List[str]]:
     doc = Document(html_text, url=url)
     summary_html = doc.summary(html_partial=True)
     tree = html.fromstring(summary_html)
     text = tree.text_content()
-    return text
+    images = tree.xpath("//img/@src")
+    return text, images

@@ -20,6 +20,7 @@ class ExtractedContent:
     text: str
     source: str  # e.g., "youtube", "x", "web"
     length: int
+    images: List[str]
 
 
 @dataclass
