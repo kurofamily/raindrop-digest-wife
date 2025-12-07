@@ -34,8 +34,11 @@ def detect_source(url: str) -> str:
 def fetch_html(url: str) -> str:
     logger.info("Fetching URL: %s", url)
     with httpx.Client(headers={"User-Agent": USER_AGENT}, timeout=20.0, follow_redirects=True) as client:
-        response = client.get(url)
-        response.raise_for_status()
+        try:
+            response = client.get(url)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise ExtractionError(f"HTTP fetch failed: {exc}") from exc
         return response.text
 
 

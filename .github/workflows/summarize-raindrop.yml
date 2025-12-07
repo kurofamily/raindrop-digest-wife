@@ -27,8 +27,8 @@ jobs:
           RAINDROP_TOKEN: ${{ secrets.RAINDROP_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
-          TO_EMAIL: ${{ secrets.TO_EMAIL }}
-          FROM_EMAIL: ${{ secrets.FROM_EMAIL }}
-          FROM_NAME: ${{ secrets.FROM_NAME }}
-          OPENAI_MODEL: ${{ secrets.OPENAI_MODEL }}
+          TO_EMAIL: ${{ vars.TO_EMAIL }}
+          FROM_EMAIL: ${{ vars.FROM_EMAIL }}
+          FROM_NAME: ${{ vars.FROM_NAME }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
         run: python main.py

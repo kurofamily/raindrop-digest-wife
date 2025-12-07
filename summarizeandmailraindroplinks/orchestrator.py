@@ -45,6 +45,9 @@ def run(settings: config.Settings) -> List[SummaryResult]:
             except (ExtractionError, SummaryError) as exc:
                 logger.exception("Failed to process item %s: %s", item.id, exc)
                 results.append(SummaryResult(item=item, status="failed", error=str(exc)))
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Unexpected failure for item %s: %s", item.id, exc)
+                results.append(SummaryResult(item=item, status="failed", error=str(exc)))
 
         subject = build_email_subject(now_jst)
         body = build_email_body(now_jst, results)
