@@ -20,6 +20,7 @@ class ExtractedContent:
     text: str
     source: str  # e.g., "youtube", "x", "web"
     length: int
+    images: List[str]
 
 
 @dataclass
@@ -27,6 +28,7 @@ class SummaryResult:
     item: RaindropItem
     status: str  # "success" | "failed"
     summary: Optional[str] = None
+    author: Optional[str] = None
     error: Optional[str] = None
 
     def is_success(self) -> bool:

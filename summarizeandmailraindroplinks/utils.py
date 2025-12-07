@@ -4,8 +4,6 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, List
 
-from dateutil import parser
-
 from .config import JST, TAG_CONFIRMED, TAG_DELIVERED, TAG_FAILED
 from .models import RaindropItem
 
@@ -21,8 +19,11 @@ def to_jst(dt: datetime) -> datetime:
 
 
 def parse_raindrop_datetime(value: str) -> datetime:
-    parsed = parser.isoparse(value)
-    return parsed
+    normalized = value.replace("Z", "+00:00") if value.endswith("Z") else value
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError as exc:
+        raise ValueError(f"Invalid datetime format: {value}") from exc
 
 
 def is_recent(item: RaindropItem, threshold_jst: datetime) -> bool:
@@ -57,6 +58,21 @@ def trim_text(text: str, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
     return text[:max_chars]
+
+
+def split_author_and_summary(summary: str) -> tuple[str, str]:
+    lines = [line.strip() for line in summary.splitlines() if line.strip()]
+    if not lines:
+        return "名無しの投稿者（情報不足）", summary
+
+    first = lines[0]
+    prefixes = ("著者/投稿者:", "著者:", "投稿者:")
+    if any(first.startswith(p) for p in prefixes):
+        author_value = first.split(":", 1)[1].strip() or "名無しの投稿者（情報不足）"
+        remaining = "\n".join(lines[1:]).strip()
+        return author_value, remaining or summary
+
+    return "名無しの投稿者（情報不足）", summary
 
 
 def threshold_from_now(now_jst: datetime, days: int) -> datetime:
