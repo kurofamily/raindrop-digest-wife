@@ -5,7 +5,7 @@ from typing import Optional
 
 from openai import APIConnectionError, APITimeoutError, OpenAI
 
-from .config import SUMMARY_CHAR_LIMIT
+from .prompts import summarization_system_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +32,7 @@ class Summarizer:
                 messages=[
                     {
                         "role": "system",
-                        "content": (
-                            "You are a Japanese summarization bot. "
-                            f"Produce a concise summary within {SUMMARY_CHAR_LIMIT} characters. "
-                            "Structure: 1) 一行要約 2) 要点 3) 自分用メモ/キーワード. "
-                            "Always respond in Japanese."
-                        ),
+                        "content": summarization_system_prompt(),
                     },
                     {"role": "user", "content": text},
                 ],
