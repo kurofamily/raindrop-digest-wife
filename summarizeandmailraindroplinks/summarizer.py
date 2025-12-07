@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from openai import APIConnectionError, APITimeoutError, OpenAI
+from openai import APIConnectionError, APITimeoutError, OpenAI, RateLimitError
 
 from .prompts import summarization_system_prompt
 
@@ -16,6 +16,10 @@ class SummaryError(Exception):
 
 class SummaryConnectionError(SummaryError):
     """Raised when summarization fails due to upstream connection issues."""
+
+
+class SummaryRateLimitError(SummaryError):
+    """Raised when summarization fails due to rate limits."""
 
 
 class Summarizer:
@@ -38,6 +42,8 @@ class Summarizer:
                 ],
                 temperature=0.3,
             )
+        except RateLimitError as exc:
+            raise SummaryRateLimitError(f"OpenAI rate limit: {exc}") from exc
         except (APIConnectionError, APITimeoutError) as exc:
             raise SummaryConnectionError(f"OpenAI connection failed: {exc}") from exc
         except Exception as exc:  # noqa: BLE001
