@@ -38,6 +38,14 @@ def run(settings: config.Settings) -> List[SummaryResult]:
         logger.info("Processing %s target items (from %s total)", len(targets), len(raw_items))
 
         results: List[SummaryResult] = []
+        if not targets:
+            logger.info("No new items to process; sending empty report.")
+            subject = build_email_subject(now_jst)
+            empty_body = "こんにちは。過去3日分のブックマークは0件でした。"
+            mailer.send(subject, empty_body)
+            logger.info("Empty report sent.")
+            return results
+
         for item in targets:
             try:
                 content = extract_text(item.link)
