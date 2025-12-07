@@ -64,13 +64,16 @@ class Summarizer:
         return RateLimitError, (APIConnectionError, APITimeoutError)
 
     def summarize(self, text: str, images: Optional[List[str]] = None) -> str:
-        include_images = self._should_include_images(text, images or [])
-        logger.info(
-            "Summarization request: chars=%s images=%s include_images=%s",
-            len(text),
-            len(images or []),
-            include_images,
-        )
+        include_images = self._should_include_images(text, images)
+        if images is None:
+            logger.info("Summarization request: chars=%s (image extraction skipped)", len(text))
+        else:
+            logger.info(
+                "Summarization request: chars=%s images=%s include_images=%s",
+                len(text),
+                len(images),
+                include_images,
+            )
         user_content = self._build_user_content(text, images or [], include_images)
         try:
             response = self._client.chat.completions.create(
@@ -100,7 +103,9 @@ class Summarizer:
         return content.strip()
 
     @staticmethod
-    def _should_include_images(text: str, images: Sequence[str]) -> bool:
+    def _should_include_images(text: str, images: Optional[Sequence[str]]) -> bool:
+        if images is None:
+            return False
         return len(text) <= IMAGE_TEXT_THRESHOLD and len(images) >= MIN_IMAGES_FOR_SUMMARY
 
     @staticmethod

@@ -8,7 +8,7 @@ import httpx
 from lxml import html
 from readability import Document
 
-from .config import MAX_EXTRACT_CHARS
+from .config import IMAGE_TEXT_THRESHOLD, MAX_EXTRACT_CHARS
 from .models import ExtractedContent
 from .utils import trim_text
 
@@ -49,13 +49,30 @@ def extract_text(url: str) -> ExtractedContent:
     if source == "youtube":
         raise ExtractionError("YouTubeリンクは手動確認対象のため自動要約しません。")
     html_text = fetch_html(url)
-    text, images = _extract_readability(html_text, url)
+    text = _extract_readability(html_text, url)
     cleaned = text.strip()
     if not cleaned:
         raise ExtractionError("Extracted text is empty.")
     trimmed = trim_text(cleaned, MAX_EXTRACT_CHARS)
-    logger.info("Extracted %s characters from %s (source=%s)", len(trimmed), url, source)
-    return ExtractedContent(text=trimmed, source=source, length=len(trimmed), images=images)
+    images = None
+    image_extraction_attempted = False
+    if len(trimmed) <= IMAGE_TEXT_THRESHOLD:
+        images = _extract_images_from_html(html_text)
+        image_extraction_attempted = True
+    logger.info(
+        "Extracted %s characters from %s (source=%s)%s",
+        len(trimmed),
+        url,
+        source,
+        "" if image_extraction_attempted else " (image extraction skipped: text too long)",
+    )
+    return ExtractedContent(
+        text=trimmed,
+        source=source,
+        length=len(trimmed),
+        images=images,
+        image_extraction_attempted=image_extraction_attempted,
+    )
 
 
 def _extract_youtube(html_text: str) -> Tuple[str, List[str]]:
@@ -76,10 +93,14 @@ def _extract_x(html_text: str) -> str:
     return description
 
 
-def _extract_readability(html_text: str, url: str) -> Tuple[str, List[str]]:
+def _extract_readability(html_text: str, url: str) -> str:
     doc = Document(html_text, url=url)
     summary_html = doc.summary(html_partial=True)
     tree = html.fromstring(summary_html)
     text = tree.text_content()
-    images = tree.xpath("//img/@src")
-    return text, images
+    return text
+
+
+def _extract_images_from_html(html_text: str) -> List[str]:
+    tree = html.fromstring(html_text)
+    return tree.xpath("//img/@src")

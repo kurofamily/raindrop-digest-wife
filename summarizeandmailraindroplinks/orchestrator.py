@@ -61,12 +61,19 @@ def run(settings: config.Settings) -> List[SummaryResult]:
             logger.info("link=%s", item.link)
             try:
                 content = extract_text(item.link)
-                logger.info(
-                    "Extracted content: chars=%s images=%s source=%s",
-                    content.length,
-                    len(content.images),
-                    content.source,
-                )
+                if content.image_extraction_attempted:
+                    logger.info(
+                        "Extracted content: chars=%s images=%s source=%s",
+                        content.length,
+                        len(content.images or []),
+                        content.source,
+                    )
+                else:
+                    logger.info(
+                        "Extracted content: chars=%s source=%s (image extraction skipped: text too long)",
+                        content.length,
+                        content.source,
+                    )
                 summary_text = summarizer.summarize(content.text, content.images)
                 results.append(SummaryResult(item=item, status="success", summary=summary_text))
             except SummaryRateLimitError as exc:
