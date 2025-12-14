@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import logging
-from typing import List
+from typing import Dict, List, Tuple
 
 from . import config
 from .config import BATCH_LOOKBACK_DAYS, TAG_DELIVERED, TAG_FAILED
 from .email_formatter import build_email_body, build_email_subject
 from .mailer import MailError, Mailer
-from .models import SummaryResult
-from .raindrop_client import RaindropClient
+from .models import RaindropItem, SummaryResult
+from .raindrop_client import RaindropApiError, RaindropClient, RaindropConnectionError
 from .summarizer import Summarizer, SummaryConnectionError, SummaryError, SummaryRateLimitError
 from .text_extractor import ExtractionError, extract_text
-from .utils import filter_new_items, threshold_from_now, to_jst, utc_now
+
+from .utils import canonicalize_url, choose_preferred_duplicate, filter_new_items, threshold_from_now, to_jst, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -36,13 +37,21 @@ def run(settings: config.Settings) -> List[SummaryResult]:
     logger.info(
         "Using OpenAI model=%s prompt_source=%s",
         settings.openai_model,
-        "env:SUMMARY_SYSTEM_PROMPT" if settings.summary_system_prompt else "default",
+        "env:SUMMARY_SYSTEM_PROMPT" if settings.summary_system_prompt != config.DEFAULT_SYSTEM_PROMPT else "default",
     )
 
     failure_notified = False
     try:
         raw_items = raindrop.fetch_unsorted_items()
         targets = filter_new_items(raw_items, threshold)
+        targets, duplicates = _dedupe_targets(targets)
+        if duplicates:
+            logger.info("Detected %s duplicate items; deleting redundant ones", len(duplicates))
+            for dup in duplicates:
+                try:
+                    raindrop.delete_item(dup.id)
+                except (RaindropConnectionError, RaindropApiError) as exc:
+                    logger.warning("Failed to delete duplicate item id=%s: %s", dup.id, exc)
         logger.info("Processing %s target items (from %s total)", len(targets), len(raw_items))
 
         results: List[SummaryResult] = []
@@ -74,14 +83,36 @@ def run(settings: config.Settings) -> List[SummaryResult]:
                         content.length,
                         content.source,
                     )
-                summary_text = summarizer.summarize(content.text, content.images)
-                results.append(SummaryResult(item=item, status="success", summary=summary_text))
-            except SummaryRateLimitError as exc:
-                logger.exception("OpenAI rate limit hit for item %s: %s", item.id, exc)
-                raise
-            except SummaryConnectionError as exc:
-                logger.exception("OpenAI connection failed for item %s: %s", item.id, exc)
-                raise
+                try:
+                    summary_text = summarizer.summarize(content.text, content.images)
+                    results.append(
+                        SummaryResult(
+                            item=item,
+                            status="success",
+                            summary=summary_text,
+                            hero_image_url=content.hero_image_url,
+                        )
+                    )
+                except (SummaryRateLimitError, SummaryConnectionError) as exc:
+                    logger.exception("OpenAI transient failure for item %s: %s", item.id, exc)
+                    results.append(
+                        SummaryResult(
+                            item=item,
+                            status="failed",
+                            error=str(exc),
+                            hero_image_url=content.hero_image_url,
+                        )
+                    )
+                except SummaryError as exc:
+                    logger.exception("Summarization failed for item %s: %s", item.id, exc)
+                    results.append(
+                        SummaryResult(
+                            item=item,
+                            status="failed",
+                            error=str(exc),
+                            hero_image_url=content.hero_image_url,
+                        )
+                    )
             except (ExtractionError, SummaryError) as exc:
                 logger.exception("Failed to process item %s: %s", item.id, exc)
                 results.append(SummaryResult(item=item, status="failed", error=str(exc)))
@@ -101,17 +132,23 @@ def run(settings: config.Settings) -> List[SummaryResult]:
                 failure_notified = True
             except MailError:
                 logger.exception("Failed to send failure notification email as well.")
-            raise
+            logger.warning("Skipping Raindrop updates due to email failure.")
+            _log_batch_counts(results)
+            return results
 
         for result in results:
-            if result.is_success() and result.summary:
-                note_text = f"▼サマリー\n{result.summary}"
-                raindrop.append_note_and_tags(result.item, note_text, [TAG_DELIVERED])
-            else:
-                error_note = f"要約失敗: {result.error}" if result.error else "要約失敗"
-                raindrop.append_note_and_tags(result.item, error_note, [TAG_DELIVERED, TAG_FAILED])
+            try:
+                if result.is_success() and result.summary:
+                    note_text = f"▼サマリー\n{result.summary}"
+                    raindrop.append_note_and_tags(result.item, note_text, [TAG_DELIVERED])
+                else:
+                    error_note = f"要約失敗: {result.error}" if result.error else "要約失敗"
+                    raindrop.append_note_and_tags(result.item, error_note, [TAG_DELIVERED, TAG_FAILED])
+            except (RaindropConnectionError, RaindropApiError) as exc:
+                logger.exception("Failed to update Raindrop item %s: %s", result.item.id, exc)
+                continue
 
-        logger.info("Batch completed. Success=%s Failure=%s", _count_success(results), _count_failure(results))
+        _log_batch_counts(results)
         return results
     except Exception as exc:  # noqa: BLE001
         if not failure_notified:
@@ -131,3 +168,37 @@ def _count_success(results: List[SummaryResult]) -> int:
 
 def _count_failure(results: List[SummaryResult]) -> int:
     return len([r for r in results if not r.is_success()])
+
+
+def _log_batch_counts(results: List[SummaryResult]) -> None:
+    total = len(results)
+    success = _count_success(results)
+    failure = _count_failure(results)
+    logger.info("Batch completed. Total=%s Success=%s Failure=%s", total, success, failure)
+
+
+def _dedupe_targets(targets: List[RaindropItem]) -> Tuple[List[RaindropItem], List[RaindropItem]]:
+    by_key: Dict[str, List[RaindropItem]] = {}
+    for item in targets:
+        key = canonicalize_url(item.link)
+        by_key.setdefault(key, []).append(item)
+
+    kept: List[RaindropItem] = []
+    duplicates: List[RaindropItem] = []
+    for key, items in by_key.items():
+        if len(items) == 1:
+            kept.append(items[0])
+            continue
+        preferred = choose_preferred_duplicate(items)
+        kept.append(preferred)
+        for item in items:
+            if item.id != preferred.id:
+                duplicates.append(item)
+        logger.info(
+            "Duplicate URL group: canonical=%s kept=%s deleted=%s",
+            key,
+            preferred.link,
+            [i.link for i in items if i.id != preferred.id],
+        )
+
+    return kept, duplicates
