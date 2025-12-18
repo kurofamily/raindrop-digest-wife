@@ -64,6 +64,7 @@ def canonicalize_url(url: str) -> str:
     Canonicalize URL to detect duplicates within a single batch run.
 
     - Remove common tracking parameters (utm_*, fbclid, gclid, etc.)
+    - Remove pagination defaults (e.g. page=1)
     - Drop fragment
     - Lowercase scheme/host
     - Sort remaining query parameters for stable comparison
@@ -74,7 +75,14 @@ def canonicalize_url(url: str) -> str:
     path = parts.path or "/"
 
     query_pairs = parse_qsl(parts.query, keep_blank_values=True)
-    filtered_pairs = [(k, v) for (k, v) in query_pairs if not _is_tracking_param(k)]
+    is_substack_like = _is_substack_like(netloc, query_pairs)
+    filtered_pairs = [
+        (k, v)
+        for (k, v) in query_pairs
+        if not _is_tracking_param(k)
+        and not _is_default_pagination_param(k, v)
+        and not _is_substack_decoration_param(is_substack_like, k)
+    ]
     filtered_pairs.sort(key=lambda kv: (kv[0], kv[1]))
     query = urlencode(filtered_pairs, doseq=True)
 
@@ -115,6 +123,37 @@ def _is_tracking_param(key: str) -> bool:
         "ctg",
         "bt",
     }
+
+
+def _is_default_pagination_param(key: str, value: str) -> bool:
+    """
+    Drop "default" pagination parameters that typically don't change content.
+
+    Example:
+      - https://example.com/article?page=1 -> https://example.com/article
+    """
+    if key.lower() == "page" and value == "1":
+        return True
+    return False
+
+
+def _is_substack_like(netloc: str, query_pairs: list[tuple[str, str]]) -> bool:
+    """
+    Heuristically detect Substack URLs, including custom domains.
+    """
+    if netloc.endswith(".substack.com"):
+        return True
+    lowered_keys = {k.lower() for (k, _v) in query_pairs}
+    return bool({"publication_id", "post_id"} & lowered_keys)
+
+
+def _is_substack_decoration_param(is_substack_like: bool, key: str) -> bool:
+    """
+    Drop Substack-specific decoration parameters (share/login funnels).
+    """
+    if not is_substack_like:
+        return False
+    return key.lower() in {"isfreemail", "triedredirect", "triggershare", "r", "post_id", "publication_id"}
 
 
 def choose_preferred_duplicate(items: List[RaindropItem]) -> RaindropItem:

@@ -1,19 +1,29 @@
 from __future__ import annotations
 
 import logging
+import os
 from typing import Tuple, List
 from urllib.parse import urljoin, urlparse
 
 import httpx
 from lxml import html
 from readability import Document
-from .config import IMAGE_TEXT_THRESHOLD, IMAGE_WORD_THRESHOLD, MAX_EXTRACT_CHARS
+from .config import MAX_EXTRACT_CHARS
 from .models import ExtractedContent
-from .utils import count_words, is_cjk_text, trim_text
+from .utils import trim_text
 
 logger = logging.getLogger(__name__)
 
-USER_AGENT = "RaindropSummarizer/0.1 (+github.com/user)"
+# NOTE:
+# 多くのサイトは「botっぽい User-Agent」を 403 で弾くことがあります（GitHub Actions からの取得で顕在化しやすい）。
+# そのためデフォルトは一般的なブラウザUAにし、必要なら環境変数で上書きできるようにします。
+DEFAULT_PRIMARY_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
+DEFAULT_SECONDARY_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0"
+)
 
 
 class ExtractionError(Exception):
@@ -30,15 +40,71 @@ def detect_source(url: str) -> str:
     return "web"
 
 
-def fetch_html(url: str) -> str:
+def _request_headers(user_agent: str) -> dict[str, str]:
+    # 「普通のブラウザに見える」最低限のヘッダに寄せる。
+    # ここを過剰に増やすとサイト依存で壊れやすいので、まずはシンプルに。
+    return {
+        "User-Agent": user_agent,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+
+def _user_agent_candidates() -> list[str]:
+    env_user_agent = (os.getenv("HTTP_USER_AGENT") or "").strip()
+    candidates: list[str] = []
+    if env_user_agent:
+        candidates.append(env_user_agent)
+    candidates.extend([DEFAULT_PRIMARY_USER_AGENT, DEFAULT_SECONDARY_USER_AGENT])
+
+    # 重複排除（順序は維持）
+    seen: set[str] = set()
+    unique: list[str] = []
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        unique.append(candidate)
+    return unique
+
+
+def fetch_html(url: str, *, transport: httpx.BaseTransport | None = None) -> str:
     logger.info("Fetching URL: %s", url)
-    with httpx.Client(headers={"User-Agent": USER_AGENT}, timeout=20.0, follow_redirects=True) as client:
-        try:
-            response = client.get(url)
-            response.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise ExtractionError(f"HTTP fetch failed: {exc}") from exc
-        return response.text
+    last_status: int | None = None
+    user_agents = _user_agent_candidates()
+    for idx, user_agent in enumerate(user_agents, start=1):
+        with httpx.Client(
+            headers=_request_headers(user_agent),
+            timeout=20.0,
+            follow_redirects=True,
+            transport=transport,
+        ) as client:
+            try:
+                response = client.get(url)
+            except httpx.RequestError as exc:
+                raise ExtractionError(f"HTTP request failed: {exc}") from exc
+
+            last_status = response.status_code
+            if response.status_code in (403, 406) and idx < len(user_agents):
+                logger.warning(
+                    "HTTP %s for %s; retrying with another User-Agent (attempt %s/%s)",
+                    response.status_code,
+                    url,
+                    idx,
+                    len(user_agents),
+                )
+                continue
+
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                hint = ""
+                if exc.response.status_code == 403:
+                    hint = " (site may block automated fetch; try setting HTTP_USER_AGENT to a browser UA)"
+                raise ExtractionError(f"HTTP fetch failed: {exc}{hint}") from exc
+            return response.text
+
+    raise ExtractionError(f"HTTP fetch failed: status={last_status}")
 
 
 def extract_text(url: str) -> ExtractedContent:
@@ -54,31 +120,17 @@ def extract_text(url: str) -> ExtractedContent:
     if not cleaned:
         raise ExtractionError("Extracted text is empty.")
     trimmed = trim_text(cleaned, MAX_EXTRACT_CHARS)
-    images = None
-    image_extraction_attempted = False
-    should_attempt_images = False
-    if is_cjk_text(trimmed):
-        should_attempt_images = len(trimmed) <= IMAGE_TEXT_THRESHOLD
-    else:
-        should_attempt_images = count_words(trimmed) <= IMAGE_WORD_THRESHOLD
-
-    if should_attempt_images:
-        images = _extract_images_from_html(html_text)
-        image_extraction_attempted = True
     logger.info(
-        "Extracted %s characters from %s (source=%s)%s%s",
+        "Extracted %s characters from %s (source=%s)%s",
         len(trimmed),
         url,
         source,
-        "" if image_extraction_attempted else " (image extraction skipped: text too long)",
         "" if not hero_image_url else " (hero image detected)",
     )
     return ExtractedContent(
         text=trimmed,
         source=source,
         length=len(trimmed),
-        images=images,
-        image_extraction_attempted=image_extraction_attempted,
         hero_image_url=hero_image_url,
     )
 
@@ -107,32 +159,6 @@ def _extract_readability(html_text: str, url: str) -> str:
     tree = html.fromstring(summary_html)
     text = tree.text_content()
     return text
-
-
-def _extract_images_from_html(html_text: str) -> List[str]:
-    tree = html.fromstring(html_text)
-    raw_urls = tree.xpath("//img/@src")
-    filtered = _filter_image_urls(raw_urls)
-    return filtered
-
-
-def _filter_image_urls(urls: List[str]) -> List[str]:
-    allowed_ext = (".jpg", ".jpeg", ".png", ".webp", ".gif")
-    blocked_keywords = ("facebook.com/tr?", "doubleclick", "adsystem", "pixel", "analytics", "collect")
-    cleaned: List[str] = []
-    for url in urls:
-        if not url:
-            continue
-        lower = url.lower()
-        if not (lower.startswith("http://") or lower.startswith("https://")):
-            continue
-        if any(bad in lower for bad in blocked_keywords):
-            continue
-        base = lower.split("?", 1)[0]
-        if not any(base.endswith(ext) for ext in allowed_ext):
-            continue
-        cleaned.append(url)
-    return cleaned[:5]
 
 
 def _extract_hero_image_url(html_text: str, page_url: str) -> str | None:
