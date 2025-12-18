@@ -153,3 +153,5 @@ GitHub のリポジトリ画面で `Settings` → `Secrets and variables` → `A
 - OpenAI のエラーが多い
   - 一時的な 502/503/504 は 1 回だけリトライします
   - それ以外の失敗は該当リンクのみ失敗扱いになり、メールには「手動確認」として載ります
+- 特定サイトの本文取得が 403 Forbidden で失敗する
+  - サイト側のbot対策で弾かれている可能性があります。`Variables` に `HTTP_USER_AGENT`（Chrome/Firefox等のブラウザUA）を設定してください。

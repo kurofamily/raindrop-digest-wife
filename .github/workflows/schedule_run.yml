@@ -34,4 +34,5 @@ jobs:
           FROM_NAME: ${{ vars.FROM_NAME }}
           OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
           BATCH_LOOKBACK_DAYS: ${{ vars.BATCH_LOOKBACK_DAYS }}
+          HTTP_USER_AGENT: ${{ vars.HTTP_USER_AGENT }}
         run: python main.py
