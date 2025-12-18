@@ -33,6 +33,18 @@ def test_canonicalize_url_strips_ga_gl_params():
     assert canonicalize_url(base) == canonicalize_url(with_ga)
 
 
+def test_canonicalize_url_strips_default_pagination_and_empty_fragment():
+    with_page_1 = "https://president.jp/articles/-/106453?page=1"
+    with_empty_fragment = "https://president.jp/articles/-/106453#"
+    assert canonicalize_url(with_page_1) == canonicalize_url(with_empty_fragment)
+
+
+def test_canonicalize_url_keeps_non_default_pagination():
+    page_1 = "https://example.com/a?page=1"
+    page_2 = "https://example.com/a?page=2"
+    assert canonicalize_url(page_1) != canonicalize_url(page_2)
+
+
 def test_choose_preferred_duplicate_prefers_shorter_url():
     now = datetime(2025, 12, 13, tzinfo=timezone.utc)
     item_short = RaindropItem(

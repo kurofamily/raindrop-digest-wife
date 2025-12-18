@@ -64,6 +64,7 @@ def canonicalize_url(url: str) -> str:
     Canonicalize URL to detect duplicates within a single batch run.
 
     - Remove common tracking parameters (utm_*, fbclid, gclid, etc.)
+    - Remove pagination defaults (e.g. page=1)
     - Drop fragment
     - Lowercase scheme/host
     - Sort remaining query parameters for stable comparison
@@ -74,7 +75,11 @@ def canonicalize_url(url: str) -> str:
     path = parts.path or "/"
 
     query_pairs = parse_qsl(parts.query, keep_blank_values=True)
-    filtered_pairs = [(k, v) for (k, v) in query_pairs if not _is_tracking_param(k)]
+    filtered_pairs = [
+        (k, v)
+        for (k, v) in query_pairs
+        if not _is_tracking_param(k) and not _is_default_pagination_param(k, v)
+    ]
     filtered_pairs.sort(key=lambda kv: (kv[0], kv[1]))
     query = urlencode(filtered_pairs, doseq=True)
 
@@ -115,6 +120,18 @@ def _is_tracking_param(key: str) -> bool:
         "ctg",
         "bt",
     }
+
+
+def _is_default_pagination_param(key: str, value: str) -> bool:
+    """
+    Drop "default" pagination parameters that typically don't change content.
+
+    Example:
+      - https://example.com/article?page=1 -> https://example.com/article
+    """
+    if key.lower() == "page" and value == "1":
+        return True
+    return False
 
 
 def choose_preferred_duplicate(items: List[RaindropItem]) -> RaindropItem:
